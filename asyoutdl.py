@@ -1,73 +1,38 @@
 from __future__ import absolute_import, unicode_literals
 
 import asyncio
-import errno
-import os
-import socket
-import time
-import random
-import re
-from youtube_dl.downloader.http import HttpFD
-from youtube_dl import YoutubeDL
-
-# from youtube_dl.downloader.common import FileDownloader
-from youtube_dl.compat import (compat_str, compat_urllib_error, )
-from youtube_dl.utils import (
-    ContentTooShortError,
-    encodeFilename,
-    int_or_none,
-    sanitize_open,
-    sanitized_Request,
-    write_xattr,
-    XAttrMetadataError,
-    XAttrUnavailableError,
-)
-
-import collections
 import contextlib
-import copy
 import datetime
 import errno
 import fileinput
+import html
 import io
-import itertools
 import json
-import locale
-import operator
 import os
-import platform
-import re
-import shutil
-import subprocess
-import socket
-import sys
-import time
-import tokenize
-import traceback
 import random
+import re
+import socket
+import time
+import traceback
 
-from string import ascii_letters
-
+import requests
+from youtube_dl import YoutubeDL
 from youtube_dl.compat import (
-    compat_basestring,
-    compat_cookiejar,
-    compat_get_terminal_size,
     compat_http_client,
-    compat_kwargs,
     compat_numeric_types,
-    compat_os_name,
     compat_str,
-    compat_tokenize_tokenize,
     compat_urllib_error,
-    compat_urllib_request,
-    compat_urllib_request_DataHandler,
+)
+from youtube_dl.downloader import get_external_downloader, PROTOCOL_MAP, FFmpegFD, HlsFD
+from youtube_dl.downloader.http import HttpFD
+from youtube_dl.postprocessor import (
+    FFmpegFixupM3u8PP,
+    FFmpegFixupM4aPP,
+    FFmpegFixupStretchedPP,
+    FFmpegMergerPP,
 )
 from youtube_dl.utils import (
-    age_restricted,
-    args_to_str,
     ContentTooShortError,
-    date_from_str,
-    DateRange,
     DEFAULT_OUTTMPL,
     determine_ext,
     determine_protocol,
@@ -75,58 +40,34 @@ from youtube_dl.utils import (
     encode_compat_str,
     encodeFilename,
     error_to_compat_str,
-    expand_path,
     ExtractorError,
-    format_bytes,
     formatSeconds,
     GeoRestrictedError,
     int_or_none,
     ISO3166Utils,
-    locked_file,
-    make_HTTPS_handler,
     MaxDownloadsReached,
-    orderedSet,
-    PagedList,
-    parse_filesize,
-    PerRequestProxyHandler,
-    platform_name,
     PostProcessingError,
-    preferredencoding,
     prepend_extension,
-    register_socks_protocols,
-    render_table,
     replace_extension,
     SameFileError,
-    sanitize_filename,
     sanitize_path,
     sanitize_url,
     sanitized_Request,
-    std_headers,
-    str_or_none,
     subtitles_filename,
     UnavailableVideoError,
     url_basename,
-    version_tuple,
     write_json_file,
-    write_string,
-    YoutubeDLCookieJar,
-    YoutubeDLCookieProcessor,
-    YoutubeDLHandler,
-    YoutubeDLRedirectHandler,
 )
-from youtube_dl.cache import Cache
-from youtube_dl.extractor import get_info_extractor, gen_extractor_classes, _LAZY_LOADER
-from youtube_dl.extractor.openload import PhantomJSwrapper
-from youtube_dl.downloader import get_external_downloader, PROTOCOL_MAP, FFmpegFD, HlsFD
-from youtube_dl.downloader.rtmp import rtmpdump_version
-from youtube_dl.postprocessor import (
-    FFmpegFixupM3u8PP,
-    FFmpegFixupM4aPP,
-    FFmpegFixupStretchedPP,
-    FFmpegMergerPP,
-    FFmpegPostProcessor,
-    get_postprocessor,
+# from youtube_dl.downloader.common import FileDownloader
+from youtube_dl.utils import (
+    sanitize_open,
+    write_xattr,
+    XAttrMetadataError,
+    XAttrUnavailableError,
 )
+
+import config
+
 
 def get_suitable_downloader1(info_dict, params={}):
     """Get the downloader class that can handle the info dict."""
@@ -153,6 +94,7 @@ def get_suitable_downloader1(info_dict, params={}):
 
     return PROTOCOL_MAP.get(protocol, asyhttp)
 
+
 class asyhttp(HttpFD):
     async def real_download(self, filename, info_dict):
         url = info_dict['url']
@@ -175,8 +117,8 @@ class asyhttp(HttpFD):
 
         is_test = self.params.get('test', False)
         chunk_size = self._TEST_FILE_SIZE if is_test else (
-            info_dict.get('downloader_options', {}).get('http_chunk_size')
-            or self.params.get('http_chunk_size') or 0)
+                info_dict.get('downloader_options', {}).get('http_chunk_size')
+                or self.params.get('http_chunk_size') or 0)
 
         ctx.open_mode = 'wb'
         ctx.resume_len = 0
@@ -237,7 +179,7 @@ class asyhttp(HttpFD):
             try:
                 try:
                     ctx.data = self.ydl.urlopen(request)
-                except (compat_urllib_error.URLError, ) as err:
+                except (compat_urllib_error.URLError,) as err:
                     # reason may not be available, e.g. for urllib2.HTTPError on python 2.6
                     reason = getattr(err, 'reason', None)
                     if isinstance(reason, socket.timeout):
@@ -259,11 +201,11 @@ class asyhttp(HttpFD):
                                 content_len = int_or_none(content_range_m.group(3))
                                 accept_content_len = (
                                     # Non-chunked download
-                                    not ctx.chunk_size
-                                    # Chunked download and requested piece or
-                                    # its part is promised to be served
-                                    or content_range_end == range_end
-                                    or content_len < range_end)
+                                        not ctx.chunk_size
+                                        # Chunked download and requested piece or
+                                        # its part is promised to be served
+                                        or content_range_end == range_end
+                                        or content_len < range_end)
                                 if accept_content_len:
                                     ctx.data_len = content_len
                                     return
@@ -275,7 +217,7 @@ class asyhttp(HttpFD):
                     ctx.open_mode = 'wb'
                 ctx.data_len = int_or_none(ctx.data.info().get('Content-length', None))
                 return
-            except (compat_urllib_error.HTTPError, ) as err:
+            except (compat_urllib_error.HTTPError,) as err:
                 if err.code == 416:
                     # Unable to resume (requested range not satisfiable)
                     try:
@@ -283,7 +225,7 @@ class asyhttp(HttpFD):
                         ctx.data = self.ydl.urlopen(
                             sanitized_Request(url, None, headers))
                         content_length = ctx.data.info()['Content-Length']
-                    except (compat_urllib_error.HTTPError, ) as err:
+                    except (compat_urllib_error.HTTPError,) as err:
                         if err.code < 500 or err.code >= 600:
                             raise
                     else:
@@ -337,11 +279,14 @@ class asyhttp(HttpFD):
                 data_len = int(data_len) + ctx.resume_len
                 min_data_len = self.params.get('min_filesize')
                 max_data_len = self.params.get('max_filesize')
+                # TODO: to async
                 if min_data_len is not None and data_len < min_data_len:
-                    self.to_screen('\r[download] File is smaller than min-filesize (%s bytes < %s bytes). Aborting.' % (data_len, min_data_len))
+                    self.to_screen('\r[download] File is smaller than min-filesize (%s bytes < %s bytes). Aborting.' % (
+                    data_len, min_data_len))
                     return False
                 if max_data_len is not None and data_len > max_data_len:
-                    self.to_screen('\r[download] File is larger than max-filesize (%s bytes > %s bytes). Aborting.' % (data_len, max_data_len))
+                    self.to_screen('\r[download] File is larger than max-filesize (%s bytes > %s bytes). Aborting.' % (
+                    data_len, max_data_len))
                     return False
 
             byte_counter = 0 + ctx.resume_len
@@ -365,7 +310,8 @@ class asyhttp(HttpFD):
                 await asyncio.sleep(0)
                 try:
                     # Download and write
-                    data_block = ctx.data.read(block_size if data_len is None else min(block_size, data_len - byte_counter))
+                    data_block = ctx.data.read(
+                        block_size if data_len is None else min(block_size, data_len - byte_counter))
                 # socket.timeout is a subclass of socket.error but may not have
                 # errno set
                 except socket.timeout as e:
@@ -373,7 +319,8 @@ class asyhttp(HttpFD):
                 except socket.error as e:
                     # SSLError on python 2 (inherits socket.error) may have
                     # no errno set but this error message
-                    if e.errno in (errno.ECONNRESET, errno.ETIMEDOUT) or getattr(e, 'message', None) == 'The read operation timed out':
+                    if e.errno in (errno.ECONNRESET, errno.ETIMEDOUT) or getattr(e, 'message',
+                                                                                 None) == 'The read operation timed out':
                         retry(e)
                     raise
 
@@ -426,7 +373,8 @@ class asyhttp(HttpFD):
                 if ctx.data_len is None:
                     eta = None
                 else:
-                    eta = self.calc_eta(start, time.time(), ctx.data_len - ctx.resume_len, byte_counter - ctx.resume_len)
+                    eta = self.calc_eta(start, time.time(), ctx.data_len - ctx.resume_len,
+                                        byte_counter - ctx.resume_len)
 
                 self._hook_progress({
                     'status': 'downloading',
@@ -477,8 +425,8 @@ class asyhttp(HttpFD):
             return True
 
         while count <= retries:
+            await asyncio.sleep(0)
             try:
-                await asyncio.sleep(0)
                 establish_connection()
                 return await download()
             except RetryDownload as e:
@@ -496,6 +444,10 @@ class asyhttp(HttpFD):
 
 
 class AsyYoutubeDL(YoutubeDL):
+    def __init__(self, params=None, auto_init=True, tele_message=None):
+        self._t_mess = tele_message
+        super(AsyYoutubeDL, self).__init__(params=params, auto_init=auto_init)
+
     async def process_video_result(self, info_dict, download=True):
         assert info_dict.get('_type', 'video') == 'video'
 
@@ -944,8 +896,9 @@ class AsyYoutubeDL(YoutubeDL):
                 return
             except (OSError, IOError) as err:
                 raise UnavailableVideoError(err)
-            except (ContentTooShortError, ) as err:
-                self.report_error('content too short (expected %s bytes and served %s)' % (err.expected, err.downloaded))
+            except (ContentTooShortError,) as err:
+                self.report_error(
+                    'content too short (expected %s bytes and served %s)' % (err.expected, err.downloaded))
                 return
 
             if success and filename != '-':
@@ -1017,6 +970,14 @@ class AsyYoutubeDL(YoutubeDL):
                     self.report_error('postprocessing: %s' % str(err))
                     return
                 self.record_download_archive(info_dict)
+
+    def to_screen(self, message, skip_eol=False):
+        """Print message to stdout if not in quiet mode."""
+
+        mess = html.escape(message)
+        strAPI = fr'https://api.telegram.org/bot{config.BOT_TOKEN}/editMessageText?chat_id={self._t_mess.chat.id}&text={mess}&message_id={self._t_mess.message_id}'
+        res = requests.get(strAPI)
+        return self.to_stdout(message, skip_eol, check_quiet=True)
 
     async def download(self, url_list):
         """Download a given list of URLs."""
@@ -1165,7 +1126,7 @@ class AsyYoutubeDL(YoutubeDL):
         return self._download_retcode
 
     async def extract_info(self, url, download=True, ie_key=None, extra_info={},
-                     process=True, force_generic_extractor=False):
+                           process=True, force_generic_extractor=False):
         """
         Return a list with a dictionary for each video extracted.
 
@@ -1223,6 +1184,7 @@ class AsyYoutubeDL(YoutubeDL):
                     self.report_error(error_to_compat_str(e), tb=encode_compat_str(traceback.format_exc()))
                 else:
                     raise
+
         return wrapper
 
     @__handle_extraction_exceptions

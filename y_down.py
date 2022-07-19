@@ -1,19 +1,7 @@
-"""download mp3 from youtube
-!!! need ffmpeg installed !!!
-In linux (from personal expirience) func youtube_dl.download make strange MP3 format (not playing in some players)
-so... in's converting by ffmpeg to mp3 - and in's work!
-
-how to install ffmpeg (on linus):
-   sudo apt update
-   sudo apt install ffmpeg
-
-check...
-    ffmpeg -version
-"""
-
-from os import getpid, path
+from os import path
 import youtube_dl
 import asyoutdl
+from aiogram.types.input_file import InputFile
 
 import re
 import json
@@ -21,32 +9,8 @@ from collections import OrderedDict
 from config import BASE_MP3_PATH
 import asyncio
 
-# class MyLogger(object):
-#     def debug(self, msg):
-#         # if re.search(r'\[download\]\s+\d+', msg):
-#         if msg[0] == '\r':
-#             # redis_client[self.keyproc] = msg[1:]
-#             self.rds.set(key=subkeys.progress, value=msg)
-#         else:
-#             return
-#
-#     def info(self, msg):
-#         print('INF:', msg)
-#
-#     def warning(self, msg):
-#         self.rds.set(key=subkeys.warning, value=f'WARNING: {msg}')
-#
-#     def critical(self, msg):
-#         self.rds.set(key=subkeys.critical, value=f'CRITICAL ERROR: {msg}')
-#
-#     def error(self, msg):
-#         self.rds.set(key=subkeys.error, value=msg)
-#
-#     def __init__(self, proc_id=None, prefix=None):
-#         self.pid = proc_id
-#         self.prefix = prefix
-#         self.rds = RedisKeys(prefix=prefix, procID=proc_id)
-
+import pathlib
+import shutil
 
 # some service funtions
 
@@ -198,80 +162,86 @@ def download1(strUrl=None, keep_video=False, audio_format='mp3',
     return filename
 
 
-async def _prepare_download_asy(url=None, logger=None, base_path=None):
-
-    def get_info(json_str):
-        return {'id': json_str['id'], 'title': json_str['title'],
-                'url': json_str['webpage_url']}
-
-    opt = {'logger': logger, 'noplaylist':True}
+async def _prepare_download_asy(url=None, logger=None, template='%(title)s.%(ext)s'):
+    opt = {'logger': logger, 'noplaylist':True, 'outtmpl': template}
 
     with youtube_dl.YoutubeDL(opt) as ydl:
-    # with asyoutdl.AsyYoutubeDL(opt) as ydl:
-
-        info = ydl.extract_info(url=url, download=False)
-
-        # get_formats(info)
-        # src = list()
-        template_name = f'{base_path}%(title)s.%(ext)s'
-        # src = {'id': info['id'], 'title': json_str['title'],
-        #         'url': json_str['webpage_url']}
-
-        # print_opt(info)
-        return info, template_name
+        return ydl.extract_info(url=url, download=False), template
 
 
-async def down_asy(url=None):
+
+async def down_asy(url=None, base_path=None, format='mp3', tele_message=None):
+    def clear_tails():
+        shutil.rmtree(base_path, ignore_errors=True)
+        # dir = pathlib.Path(base_path)
+        # for f in dir.glob('*'):
+        #     f.unlink()
+
+    Msg = await tele_message.bot.send_message(chat_id=tele_message.chat.id, text=f'Загружаем:')
+
+    template = f'{base_path}%(title)s.%(ext)s'
     try:
-        source, templ_file = await _prepare_download_asy(logger=None, url=url, base_path='')
-        print('OPT:', source, templ_file)
+        source, templ = await _prepare_download_asy(logger=None, url=url, template=template)
     except youtube_dl.utils.DownloadError as e:
+        msg_err = await tele_message.bot.send_message(chat_id=tele_message.chat.id,
+                                            text=f'Сбор информации о скачиваемом ролике\n{e}\nОстановлено')
+        # await msg_err.edit_text(msg_err.text + ' - вот так')
+
+
         return -1
+    if format == 'mp3':
+        opts = dwnOptions(which='audio', format=format, name_template=templ)
+    else:
+        opts = dwnOptions(which='video', format=format, name_template=templ)
 
-    opts = dwnOptions(which='audio', name_template=templ_file, format='mp3')
+    with asyoutdl.AsyYoutubeDL(opts.options, tele_message=Msg) as ydl:
+        fname = pathlib.Path(ydl.prepare_filename(source)).stem
+        filename = path.join(base_path, f'{fname}.{format}')
 
-
-    with asyoutdl.AsyYoutubeDL(opts.options) as ydl:
-        #         ydl.cache.remove()
-        # if callable_hook:
-        # opts.external_downloader(asyoutdl.asyhttp(ydl=ydl, params=opts.options))
-        filename = path.join('', f'{source["title"]}.mp3')
         try:
             await ydl.download([source['webpage_url']])
+            fl = InputFile(path_or_bytesio=filename)
+            Message = await tele_message.bot.send_document(chat_id=tele_message.chat.id, document=fl.get_file())
+            # pathlib.Path(filename).unlink()
+            clear_tails()
+
         except asyncio.exceptions.CancelledError as err:
-            print(err)
+            # cancel by user - clear dwnld files
+            clear_tails()
+            await tele_message.bot.send_message(chat_id=tele_message.chat.id,
+                                                text=f'Остановлено пользователем')
+        except youtube_dl.utils.DownloadError as err:
+            await tele_message.bot.send_message(chat_id=tele_message.chat.id,
+                                                text=f'Ошибка скачивания: {err}\nПопробуйте скачать еще раз - так бывает')
+        except FileNotFoundError:
+            if format != 'mp3':
+                filename = path.join(base_path, f'{fname}.mkv')
+                fl = InputFile(path_or_bytesio=filename)
+                Message = await tele_message.bot.send_document(chat_id=tele_message.chat.id, document=fl.get_file())
+                clear_tails()
+                # pathlib.Path(filename).unlink()
+            else:
+                raise FileNotFoundError
 
     return filename
-
-async def corro_rapidomente(tsk):
-    for i in range(10000):
-        print('\ncorro', i)
-        if i>4:
-            tsk.cancel('WHAM!!')
-        await asyncio.sleep(1)
-
-
-async def main(url):
-    # Schedule three calls *concurrently*:
-
-    tDwnl = asyncio.create_task(down_asy(url=url))
-    tRaton = asyncio.create_task(corro_rapidomente(tDwnl))
-
-    L = await asyncio.gather(
-        tRaton,
-        tDwnl
-    )
-    print(L)
-
-
 
 if __name__ == '__main__':
 
     # video_url = 'https://www.youtube.com/watch?v=jzD_yyEcp0M'
     video_url = 'https://www.youtube.com/watch?v=8Fl6d_fSRNs&list=PLkz3fL8MYDt5FbiY3A1g65CdGaI_CISm4'
+    video_url = 'https://www.youtube.com/watch?v=cRkxq0xqGpc'
     # video_url = 'https://www.youtube.com/watch?v=Vh_3zdmaHbk&list=PLkz3fL8MYDt5FbiY3A1g65CdGaI_CISm4&index=3'
     #
     # download1(strUrl=video_url)
     # down_asy(video_url)
-    asyncio.run(main(video_url))
+    # asyncio.run(main(video_url))
+    def clear_tails(fname):
+        print('CLEAR', 'FILES/420049032/', fname)
+        dir = pathlib.Path('FILES/420049032/')
+        print(list(dir.glob('*')))
+        for f in dir.glob(f'*'):
+            print(f)
+            # f.unlink()
+
+    clear_tails('INNA - Shining Star [Online Video]')
     print('All done.')

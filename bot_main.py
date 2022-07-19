@@ -15,7 +15,7 @@ from shutil import rmtree
 from aiogram.utils.markdown import text, hbold, html_decoration
 
 import config
-from y_down import download1
+from y_down import download1, down_asy
 from multiprocessing import Process, active_children
 from os import getpid, path
 import asyncio
@@ -106,7 +106,15 @@ async def start(message: types.Message, state: FSMContext):
 @dp.message_handler(commands='main', state='*')
 @dp.message_handler(Text(equals='main'), state='*')
 async def main(message: types.Message, state: FSMContext):
+    ud = await state.get_data()
+    try:
+        vq = ud['videoh']
+    except KeyError:
+        vq = def_video
+    await state.finish()
     await DownloadState.select.set()
+    await state.update_data(videoh=vq)
+
     _mess = text(InfoMessage.sStart, sep='\n')
     await bot.send_message(chat_id=message.chat.id,
                            text=_mess, reply_markup=menu(), parse_mode=ParseMode.HTML)
@@ -143,19 +151,17 @@ async def show_help(message: types.Message, state: FSMContext):
 
 @dp.message_handler(commands='stop', state='*')
 @dp.message_handler(Text(equals='stop'), state='*')
-async def show_state(message: types.Message, state: FSMContext):
-    print('STOP PRESSED')
-    st = await state.get_state()
+async def stop_coru(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
     ud = await state.get_data()
-    if st==DownloadState.dwnload:
-        await DownloadState.select.set()
-        await bot.send_message(chat_id=message.chat.id, text=f'Останавливаем процесс {ud["curproc"]}')
-        for chp in active_children():
-            if str(chp.pid) == ud["curproc"]:
-                chp.terminate()
-                await state.update_data(curproc=0)
-
-
+    tsks = asyncio.all_tasks()
+    if current_state == DownloadState.dwnload.state:
+        for t in tsks:
+            if t.get_name() == ud['task']:
+                t.cancel(msg='by user')
+                await DownloadState.select.set()
+                await bot.send_message(chat_id=message.chat.id, text=f'Останавливаем процесс {t.get_name()}')
+                await main(message, state)
 
 @dp.callback_query_handler(Text(equals=['audio', 'video'], ignore_case=True), state=DownloadState.select)
 async def process_select(callback_query: types.CallbackQuery, state: FSMContext):
@@ -168,8 +174,20 @@ async def process_select(callback_query: types.CallbackQuery, state: FSMContext)
         await state.update_data(current='audio')
 
     else:
-        await callback_query.message.reply(InfoMessage.sVideo.format(qual=ud["videoh"]),
-                                           reply_markup=video_menu())
+        try:
+            vq = ud["videoh"]
+        except KeyError:
+            vq= def_video
+
+        # await callback_query.message.reply(InfoMessage.sVideo.format(qual=vq),
+        #                                    reply_markup=video_menu())
+
+        await bot.edit_message_text(message_id=callback_query.message.message_id,
+                                    chat_id=callback_query.message.chat.id,
+                                    parse_mode=types.ParseMode.HTML,
+                                    text=InfoMessage.sVideo.format(qual=vq),
+                                    reply_markup=video_menu())
+
         await state.update_data(current='video')
 
 
@@ -181,6 +199,7 @@ async def process_select_video(callback_query: types.CallbackQuery, state: Downl
     # st = await state.get_state()
 
     ud = await state.get_data()
+
     await bot.edit_message_text(message_id=callback_query.message.message_id,
                                 chat_id=callback_query.message.chat.id,
                                 parse_mode=types.ParseMode.HTML,
@@ -188,117 +207,47 @@ async def process_select_video(callback_query: types.CallbackQuery, state: Downl
                                 reply_markup=video_menu())
 
 
-#     await message.reply(text='Непонятная команда')
-
-
-# async def down_load(url, chat_id=None):
-#     try:
-#         fl = download1(strUrl=url, keep_video=False)
-#         await bot.send_document(chat_id=chat_id, document=InputFile(fl))
-#         rmtree(fl, ignore_errors=True)
-#         return 0
-#     finally:
-#         return -1
 
 @dp.message_handler(state=DownloadState.select)
 async def echo(message: types.Message, state: FSMContext):
-    st = await state.get_state()
-
     ud = await state.get_data()
+    try:
+        current = ud['current']
+    except KeyError:
+        await main(message, state)
+        return
 
-    if ud['current'] == 'audio':
+    if current == 'audio':
         # download audio
-        # await bot.send_message(chat_id=message.chat.id, text='Will be audio download')
-        await bot.send_message(chat_id=message.chat.id, text=f'Will be audio download {message.text}',
-                               parse_mode=types.ParseMode.HTML, reply_markup=main_menu())
-
-        # asyncio.create_task(down_load(url=message.text, chat_id=message.chat.id))
-
-        # fl = await download1(strUrl=message.text)
-        # fl=None
-        # p = Process(target = down_load, args=(message.text, message.chat.id))
         await DownloadState.dwnload.set()
+        dwntask = asyncio.create_task(down_asy(url=message.text,
+                                               base_path=f'FILES/{message.from_user.id}/', tele_message=message))
 
-        # p.start()
-        # print(p.pid)
-        await down_load(message.text, chat_id=message.chat.id)
-        # await state.update_data(curproc=p.pid)
+        await state.update_data(task=dwntask.get_name())
 
-        # p.join()
-        # print(fl)
-        # if path.exists(fl):
-        #     await bot.send_document(chat_id=message.chat.id, document=InputFile(fl))
-        #     rmtree(fl, ignore_errors=True)
-
-    elif ud['current'] == 'video':
+    elif current == 'video':
         # select video quality
-        await bot.send_message(chat_id=message.chat.id, text='Качаем видео')
+        # await bot.send_message(chat_id=message.chat.id, text='Качаем видео')
+        await DownloadState.dwnload.set()
+        dwntask = asyncio.create_task(down_asy(url=message.text, format='mp4',
+                                               base_path=f'FILES/{message.from_user.id}/', tele_message=message))
+
+        await state.update_data(task=dwntask.get_name())
 
     else:
         await bot.send_message(chat_id=message.chat.id, text='Что-то непонятное происходит...')
 
+@dp.message_handler(state=DownloadState.dwnload)
+async def echo(message: types.Message, state: FSMContext):
 
-#
-#
-# @dp.callback_query_handler(Text(equals='mons', ignore_case=True), state=OrderFood.select_rubr)
-# async def process_mons(callback_query: types.CallbackQuery, state: FSMContext):
-#     await bot.answer_callback_query(callback_query.id)
-#     await OrderFood.select_mon.set()
-#     await state.update_data(current_R=callback_query.data, top=botserv.list_pages[0], select_mons='main')
-#     await bot.send_message(chat_id=callback_query.message.chat.id, parse_mode=types.ParseMode.HTML,
-#                            text=hbold('МОНИТОРИНГИ'), reply_markup=rplmain_menu(show_back=True))
-#     await bot.send_message(chat_id=callback_query.message.chat.id,
-#                            text='Выберете мониторинг', reply_markup=mons_menu())
-#
-#
-# @dp.callback_query_handler(Text(equals=['infl', 'fin', 'trends', 'rail', 'tends',
-#                                         'santech', 'growtech', 'socmon', 'tez'],
-#                                 ignore_case=True), state=OrderFood.select_mon)
-# async def process_mon_items(callback_query: types.CallbackQuery, state: FSMContext):
-#     await bot.answer_callback_query(callback_query.id)
-#     await state.update_data(select_mons=callback_query.data, top=botserv.list_pages[0])
-#     await show_items(callback_query.message, state)
-#
-#
-# @dp.callback_query_handler(lambda cbm: cbm.data and cbm.data in list(map(str, botserv.list_pages)),
-#                            state=[OrderFood.select_rubr, OrderFood.select_mon])
-# async def process_news(callback_query: types.CallbackQuery, state: FSMContext):
-#     await bot.answer_callback_query(callback_query.id)
-#     await state.update_data(top=int(callback_query.data))
-#     await show_items(callback_query.message, state)
-#
-#
-# @dp.callback_query_handler(state=OrderFood.select_rubr)
-# async def process_select(callback_query: types.CallbackQuery, state: FSMContext):
-#     await bot.answer_callback_query(callback_query.id)
-#     await state.update_data(current_R=callback_query.data)
-#     _mess = 'Выберете раздел:'
-#     await bot.edit_message_text(message_id=callback_query.message.message_id,
-#                                 chat_id=callback_query.message.chat.id,
-#                                 parse_mode=types.ParseMode.HTML,
-#                                 text=f'{_mess}{callback_query.data}', reply_markup=main_menu())
-#     ud = await state.get_data()
-#     print(ud)
-#
-# @dp.message_handler(state='*')
-# async def echo(message: types.Message, state: FSMContext):
-#     await message.reply(text='Непонятная команда')
-#     await show_context_menu(message, state)
-#
-#
-# @dp.message_handler(content_types=ContentType.ANY, state='*')
-# async def unknown_message(msg: types.Message, state: FSMContext):
-#     message_text = text('Ха-ха. Вы пошутили - я тоже посмеялся',
-#                         '(help вам в помощь)')
-#
-#     await bot.send_message(msg.from_user.id, message_text, parse_mode=types.ParseMode.HTML,
-#                            reply_markup=main_menu())
-#     await show_context_menu(msg, state)
-#
-#
-# async def shutdown(dispatcher: Dispatcher):
-#     await dispatcher.storage.close()
-#     await dispatcher.storage.wait_closed()
+    ud = await state.get_data()
+    tsks = asyncio.all_tasks()
+
+    for t in tsks:
+        if t.get_name() == ud['task']:
+            await message.reply(text='Сначала надо закончить то, что начали')
+            return
+    await main(message, state)
 
 
 if __name__ == '__main__':
