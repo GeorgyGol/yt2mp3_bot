@@ -1,16 +1,14 @@
-from os import path
-import youtube_dl
-import asyoutdl
-from aiogram.types.input_file import InputFile
-
-import re
-import json
-from collections import OrderedDict
-from config import BASE_MP3_PATH
 import asyncio
-
 import pathlib
 import shutil
+from os import path
+
+import youtube_dl
+from aiogram.types.input_file import InputFile
+
+import asyoutdl
+from config import BASE_MP3_PATH
+
 
 # some service funtions
 
@@ -29,11 +27,13 @@ def get_formats(video_info):
         print('FS:', f['filesize'], 'formID:', f['format_id'], 'formNote:', f['format_note'], 'EXT:', f['ext'])
     print('=' * 50)
 
+
 def print_opt(opt, from_name=''):
     from pprint import pprint
     print(f'============ options from {from_name} =====================')
     pprint(opt)
     print('============================================================')
+
 
 # ===============================================================
 
@@ -41,17 +41,17 @@ class dwnOptions():
 
     def _audio_opt(self, format, logger, name_template):
         return {
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': format,
-                }],
-                'outtmpl': name_template,
-                'logger': logger,
-                'prefer_ffmpeg': True,
-                'keepvideo': False,
-                'noplaylist': True
-            }
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': format,
+            }],
+            'outtmpl': name_template,
+            'logger': logger,
+            'prefer_ffmpeg': True,
+            'keepvideo': False,
+            'noplaylist': True
+        }
 
     def _video_opt(self, format, logger, name_template, vq):
         # post_proc = [{
@@ -90,87 +90,23 @@ class dwnOptions():
         }
 
     def __init__(self, which='audio', format='mp3', logger=None, name_template='', video_quality='360'):
-        if which=='audio':
+        if which == 'audio':
             self.options = self._audio_opt(format, logger, name_template)
-        elif which=='video':
+        elif which == 'video':
             self.options = self._video_opt(format, logger, name_template, video_quality)
 
     def add_progress_hook(self, hook):
         self.options.update({'progress_hooks': [hook, ]})
         return self.options
 
-    def external_downloader(self, dwnldr):
-        self.options.update({'external_downloader': dwnldr})
-        # pprint(options)
-
-def _prepare_download(url=None, logger=None, base_path=None):
-
-    def get_info(json_str):
-        return {'id': json_str['id'], 'title': json_str['title'],
-                'url': json_str['webpage_url']}
-
-    opt = {'logger': logger, 'noplaylist':True}
-
-    # with youtube_dl.YoutubeDL(opt) as ydl:
-    with youtube_dl.YoutubeDL(opt) as ydl:
-
-        info = ydl.extract_info(url=url, download=False)
-
-        # get_formats(info)
-        src = list()
-        template_name = f'{base_path}%(title)s.%(ext)s'
-        src = [get_info(info), ]
-
-        # print_opt(info)
-        return src, template_name
-
-def download1(strUrl=None, keep_video=False, audio_format='mp3',
-              base_path = BASE_MP3_PATH, video_quality='360'):
-    assert strUrl
-
-    # logg = MyLogger(prefix=pre, proc_id=getpid())
-    logg=None
-    # rds = RedisKeys(prefix=pre, procID=getpid())
-    # rds.set(key=subkeys.status, value='STARTED')
-    try:
-        source, templ_file = _prepare_download(logger=logg, url=strUrl, base_path=base_path)
-        print('OPT:', source, templ_file)
-    except youtube_dl.utils.DownloadError as e:
-        # rds.set(key=subkeys.status, value='STOPED')
-        # rds.set(key=subkeys.error, value=e)
-        return -1
-
-    opts = dwnOptions(which='video' if keep_video else 'audio', video_quality=video_quality,
-                      format=audio_format, logger=logg, name_template=templ_file)
-
-    with youtube_dl.YoutubeDL(opts.options) as ydl:
-
-        #         ydl.cache.remove()
-        # if callable_hook:
-        filename = path.join(base_path, f'{source[0]["title"]}.{audio_format}')
-        try:
-            ydl.download([source[0]['url']])
-            # rds.set_file(filename=filename, status='done')
-        except youtube_dl.utils.DownloadError as yterr:
-            # rds.set_file(filename=filename, status='error', info='download error')
-            pass
-        except:
-            # rds.set_file(filename=filename, status='error', info='some base error')
-            pass
-
-    # rds.set(key=subkeys.status, value='STOPED')
-    return filename
-
-
-async def _prepare_download_asy(url=None, logger=None, template='%(title)s.%(ext)s'):
-    opt = {'logger': logger, 'noplaylist':True, 'outtmpl': template}
+def _prepare_download_asy(url=None, logger=None, template='%(title)s.%(ext)s'):
+    opt = {'logger': logger, 'noplaylist': True, 'outtmpl': template}
 
     with youtube_dl.YoutubeDL(opt) as ydl:
         return ydl.extract_info(url=url, download=False), template
 
 
-
-async def down_asy(url=None, base_path=None, format='mp3', tele_message=None):
+async def down_asy(url=None, base_path=None, format='mp3', tele_message=None, video_size='250'):
     def clear_tails():
         shutil.rmtree(base_path, ignore_errors=True)
         # dir = pathlib.Path(base_path)
@@ -181,18 +117,17 @@ async def down_asy(url=None, base_path=None, format='mp3', tele_message=None):
 
     template = f'{base_path}%(title)s.%(ext)s'
     try:
-        source, templ = await _prepare_download_asy(logger=None, url=url, template=template)
+        source, templ = _prepare_download_asy(logger=None, url=url, template=template)
     except youtube_dl.utils.DownloadError as e:
         msg_err = await tele_message.bot.send_message(chat_id=tele_message.chat.id,
-                                            text=f'Сбор информации о скачиваемом ролике\n{e}\nОстановлено')
+                                                      text=f'Сбор информации о скачиваемом ролике\n{e}\nОстановлено')
         # await msg_err.edit_text(msg_err.text + ' - вот так')
-
 
         return -1
     if format == 'mp3':
         opts = dwnOptions(which='audio', format=format, name_template=templ)
     else:
-        opts = dwnOptions(which='video', format=format, name_template=templ)
+        opts = dwnOptions(which='video', format=format, name_template=templ, video_quality=video_size)
 
     with asyoutdl.AsyYoutubeDL(opts.options, tele_message=Msg) as ydl:
         fname = pathlib.Path(ydl.prepare_filename(source)).stem
@@ -225,11 +160,14 @@ async def down_asy(url=None, base_path=None, format='mp3', tele_message=None):
 
     return filename
 
+
 if __name__ == '__main__':
 
     # video_url = 'https://www.youtube.com/watch?v=jzD_yyEcp0M'
     video_url = 'https://www.youtube.com/watch?v=8Fl6d_fSRNs&list=PLkz3fL8MYDt5FbiY3A1g65CdGaI_CISm4'
     video_url = 'https://www.youtube.com/watch?v=cRkxq0xqGpc'
+
+
     # video_url = 'https://www.youtube.com/watch?v=Vh_3zdmaHbk&list=PLkz3fL8MYDt5FbiY3A1g65CdGaI_CISm4&index=3'
     #
     # download1(strUrl=video_url)
@@ -242,6 +180,7 @@ if __name__ == '__main__':
         for f in dir.glob(f'*'):
             print(f)
             # f.unlink()
+
 
     clear_tails('INNA - Shining Star [Online Video]')
     print('All done.')
