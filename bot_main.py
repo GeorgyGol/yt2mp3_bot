@@ -15,7 +15,7 @@ from shutil import rmtree
 from aiogram.utils.markdown import text, hbold, html_decoration
 
 import config
-from y_down import download1, down_asy
+from y_down import down_asy
 from multiprocessing import Process, active_children
 from os import getpid, path
 import asyncio
@@ -36,15 +36,9 @@ class DownloadState(StatesGroup):
 
 
 class InfoMessage():
-    sAudio = 'Качаем аудио.\nАдресок изволите?'
-    sVideo = 'Качаем видео.\nТекущее качество "{qual}"\nАдресок изволите?'
-    sStart = 'Что качаем?'
-
-async def down_load(url, chat_id=None):
-    fl = download1(strUrl=url, keep_video=False)
-    await bot.send_document(chat_id=chat_id, document=InputFile(fl))
-    rmtree(fl, ignore_errors=True)
-    return 0
+    sAudio = 'Качаем audio.\nАдресок изволите? (url please)'
+    sVideo = 'Качаем video.\nТекущее качество "{qual}"\nАдресок изволите? (url please)'
+    sStart = 'Что качаем? (what do y need?)'
 
 def iterate_group(iterator, count):
     for i in range(0, len(iterator), count):
@@ -59,6 +53,8 @@ def main_menu():
 
 def menu():
     ikbt = InlineKeyboardMarkup()
+    ikbt.row(InlineKeyboardButton(f'taberna', callback_data='taberna', url='https://t.me/dancer_ici'),
+             InlineKeyboardButton(f'G-movie', callback_data='Gmovie', url='https://t.me/kandianjang'))
     ikbt.row(InlineKeyboardButton(f'audio', callback_data='audio'),
              InlineKeyboardButton(f'video', callback_data='video'))
 
@@ -91,6 +87,7 @@ async def start(message: types.Message, state: FSMContext):
 
     th = text(html_decoration.bold(f'Здравствуйте {message.from_user.full_name}!'),
               'Вас приветствует телеграм бот-качалка из youtube',
+              'А вот тут много музыки https://t.me/dancer_ici',
               sep='\n')
 
     await bot.send_message(chat_id=message.chat.id, text=th, parse_mode=ParseMode.HTML, reply_markup=main_menu())
@@ -127,7 +124,7 @@ async def show_help(message: types.Message, state: FSMContext):
                  'Качает аудио (в максимальном качестве) и видео (качество на выбор)',
                  'Команды:',
                  ' - /main - возврат на первый экран',
-                 ' - /back - возврат на предидущий экран',
+                 ' - /taberna - переход на канал с музыкой',
                  ' - /stop - остановить активное скачивание',
                  ' - /help - это хелп',
                  hbold('Выбор "чего качаем":'),
@@ -143,6 +140,7 @@ async def show_help(message: types.Message, state: FSMContext):
                  ' - 720 - по высоте не менее 720 (почти HD)',
                  ' - best - самое лучшее (ждать долго)',
                  hbold('А дальше вводим адрес и качаем. Скаченный файл посылается в этот чат (персональный, с ботом)'),
+                 'А вот тут много музыки https://t.me/dancer_ici',
                  sep='\n')
     await bot.send_message(chat_id=message.chat.id, disable_web_page_preview=True,
                            text=_mess, reply_markup=main_menu(), parse_mode=ParseMode.HTML)
@@ -228,8 +226,14 @@ async def echo(message: types.Message, state: FSMContext):
     elif current == 'video':
         # select video quality
         # await bot.send_message(chat_id=message.chat.id, text='Качаем видео')
+
+        try:
+            vq = ud["videoh"]
+        except KeyError:
+            vq= def_video
+
         await DownloadState.dwnload.set()
-        dwntask = asyncio.create_task(down_asy(url=message.text, format='mp4',
+        dwntask = asyncio.create_task(down_asy(url=message.text, format='mp4', video_size=vq,
                                                base_path=f'FILES/{message.from_user.id}/', tele_message=message))
 
         await state.update_data(task=dwntask.get_name())
